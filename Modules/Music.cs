@@ -26,16 +26,7 @@ namespace MusicBot.Modules
             await _service.JoinAudioChannelAsync(Context.Guild, (Context.User as IVoiceState).VoiceChannel);
         }
 
-        [Command("autoplay", RunMode = RunMode.Async)]
-        [Alias("auto")]
-        [Summary("Start the music autoplay system.")]
-        public async Task AutoPlay()
-        {
-            Console.WriteLine($"[ {DateTime.Now,0:t} ] Autoplay started");
-            await _service.StartPlaying(Context.Guild as SocketGuild, Context.Client, (Context.User as IVoiceState).VoiceChannel);
-        }
-
-        [Command("leave", RunMode = RunMode.Async)]
+        [Command("leave")]
         [Alias("bye")]
         [Summary("Kick the bot from voice.")]
         public async Task LeaveCmd()
@@ -45,13 +36,22 @@ namespace MusicBot.Modules
             await _service.LeaveAudioChannelAsync(Context.Guild);
         }
 
+        [Command("autoplay", RunMode = RunMode.Async)]
+        [Alias("auto")]
+        [Summary("Start the music autoplay system.")]
+        public async Task AutoPlay([Summary("Can be left empty and bot will pull from config file. Part of Playlist URL after `https://www.youtube.com/playlist?list=`"), Remainder] string playlistID = null)
+        {
+            Console.WriteLine($"[ {DateTime.Now,0:t} ] Autoplay started");
+            await _service.StartAutoplayAsync(Context.Guild as SocketGuild, Context.Client, (Context.User as IVoiceState).VoiceChannel, playlistID);
+        }
+
         [Command("play", RunMode = RunMode.Async)]
         [Alias("p", "request")]
         [Summary("Request a song to be played from the bot. Must be a valid YouTube link.")]
-        public async Task PlayCmd([Remainder] string url)
+        public async Task PlayCmd([Summary("Youtube URL for a song to be played."), Remainder] string url)
         {
             Console.WriteLine($"[ {DateTime.Now,0:t} ] Adding to requests list");
-            bool added = await _service.AddToPlaylistAsync(url);
+            bool added = await _service.RequestSong(url);
             if (added)
                 await ReplyAsync("Added song to requests playlist.");
             else
@@ -59,11 +59,11 @@ namespace MusicBot.Modules
             if (!_service.IsPlaying)
             {
                 Console.WriteLine($"[ {DateTime.Now,0:t} ] Audio service not currently playing music, starting music.");
-                await _service.StartPlaying(Context.Guild as SocketGuild, Context.Client, (Context.User as IVoiceState).VoiceChannel);
+                await _service.StartAutoplayAsync(Context.Guild as SocketGuild, Context.Client, (Context.User as IVoiceState).VoiceChannel, "");
             }
         }
 
-        [Command("stop", RunMode = RunMode.Async)]
+        [Command("stop")]
         [Summary("Stop the music that is being played.")]
         public async Task StopCmd()
         {
@@ -73,13 +73,13 @@ namespace MusicBot.Modules
                 await Context.Client.SetGameAsync("");
                 _service.StopPlaying();
                 Console.WriteLine($"[ {DateTime.Now,0:t} ] Music stopped");
+                await ReplyAsync("Music stopped.");
             }
             else
                 Console.WriteLine($"[ {DateTime.Now,0:t} ] Stop called but no music being played.");
         }
 
-
-        [Command("skip", RunMode = RunMode.Async)]
+        [Command("skip")]
         [Summary("Skip the current song that is being played.")]
         public async Task SkipCmd()
         {
@@ -87,6 +87,7 @@ namespace MusicBot.Modules
             {
                 Console.WriteLine($"[ {DateTime.Now,0:t} ] Skipping music");
                 _service.SkipSong();
+                await ReplyAsync("Skipping song.");
             }
             else
                 Console.WriteLine($"[ {DateTime.Now,0:t} ] Skip called but no music being played.");

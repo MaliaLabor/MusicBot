@@ -1,16 +1,11 @@
 ﻿using Discord;
 using Discord.Audio;
 using Discord.WebSocket;
-using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using YoutubeExplode;
-using YoutubeExplode.Common;
 
 namespace MusicBot
 {
@@ -19,60 +14,33 @@ namespace MusicBot
         private readonly ConcurrentDictionary<ulong, IAudioClient> _connectedChannels = new ConcurrentDictionary<ulong, IAudioClient>();
         private ConcurrentQueue<string> _userRequests;
         private ConcurrentQueue<string> _autoPlaylist;
-        private string _playlistId;
         private CancellationTokenSource _tokenSource;
         private CancellationToken _cancellationToken;
-        private YoutubeClient _ytClient;
         private AudioOutStream _audioStream;
+        private IYoutubeHandler _ytHandler;
 
         public bool IsPlaying { get; set; }
         public string CurrentlyPlaying { get; set; }
+        public bool ValidPlaylistId { get; set; }
 
         public AudioService()
         {
-            _ytClient = new YoutubeClient();
             _userRequests = new ConcurrentQueue<string>();
             _autoPlaylist = new ConcurrentQueue<string>();
-            _playlistId = JsonConvert.DeserializeObject<dynamic>(File.ReadAllText("config.json")).PlaylistId;
             IsPlaying = false;
+            _ytHandler = new YoutubeHandler();
         }
 
-        public async Task<bool> AddToPlaylistAsync(string url)
+        public async Task<bool> RequestSong(string url)
         {
-            if (await VideoExistsAsync(url))
-            {
-                _userRequests.Enqueue(url);
-                Console.WriteLine($"[ {DateTime.Now,0:t} ] {url} added, {_userRequests.Count} songs in the user requests list.");
+            int count = _userRequests.Count;
+            _userRequests = await _ytHandler.AddToPlaylistAsync(url, _userRequests);
+            if (_userRequests.Count > count)
                 return true;
-            }
-            Console.WriteLine($"[ {DateTime.Now,0:t} ] Error, could not find song at url: {url}");
             return false;
         }
 
-        public async Task CreateAutoPlaylistAsync()
-        {
-            try
-            {
-                if (_playlistId != null)
-                {
-                    // get list of videos in playlist and shuffle them
-                    var videos = await _ytClient.Playlists.GetVideosAsync(_playlistId);
-                    var rng = new Random();
-                    foreach (var video in videos.OrderBy(x => rng.Next()))
-                    {
-                        _autoPlaylist.Enqueue($"https://youtu.be/{video.Id}");
-                    }
-                }
-                else
-                    Console.WriteLine($"[ {DateTime.Now,0:t} ] Error getting playlist ID from config file.");
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"[ {DateTime.Now,0:t} ] Exception while creating playlist from Youtube: {e}");
-            }
-        }
-
-        public async Task StartPlaying(SocketGuild guild, DiscordSocketClient discordClient, IVoiceChannel channel)
+        public async Task StartAutoplayAsync(SocketGuild guild, DiscordSocketClient discordClient, IVoiceChannel channel, string playlistId)
         {
             IAudioClient client;
             if (!_connectedChannels.TryGetValue(guild.Id, out client))
@@ -91,20 +59,21 @@ namespace MusicBot
                     await _audioStream.FlushAsync();
                     _audioStream = null;
                 }
-                _audioStream = client.CreatePCMStream(AudioApplication.Music, 96 * 1024); // default bitrate is 96 * 1024 if not specified
+                _audioStream = client.CreatePCMStream(AudioApplication.Mixed); // default bitrate is 96 * 1024 if not specified
                 bool autoPlaylistHasSongs = true;
                 bool requestsPlaylistHasSongs = true;
                 string autoplayUrl;
                 string requestUrl;
                 // check if auto playlist has songs in it, if not create playlist from config
+                _autoPlaylist = await _ytHandler.CreateAutoPlaylistAsync(playlistId, _autoPlaylist);
                 autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
                 if (!autoPlaylistHasSongs)
                 {
-                    Console.WriteLine($"[ {DateTime.Now,0:t} ] Retrieving auto playlist from Youtube.");
-                    await CreateAutoPlaylistAsync();
-                    Console.WriteLine($"[ {DateTime.Now,0:t} ] Playlist retrieval complete. Number of songs in list: {_autoPlaylist.Count}");
-                    autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
+                    ValidPlaylistId = false;
+                    Console.WriteLine($"[ {DateTime.Now,0:t} ] No valid playlist id found. Disabling autoplaylist.");
                 }
+                else
+                    ValidPlaylistId = true;
                 requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
                 while (IsPlaying && (requestsPlaylistHasSongs || autoPlaylistHasSongs))
                 {
@@ -112,7 +81,7 @@ namespace MusicBot
                     {
                         while (IsPlaying && requestsPlaylistHasSongs)
                         {
-                            await CheckVideoTitleAsync(requestUrl);
+                            CurrentlyPlaying = await _ytHandler.GetVideoTitle(requestUrl);
                             await discordClient.SetGameAsync(CurrentlyPlaying);
                             Console.WriteLine($"[ {DateTime.Now,0:t} ] Retrieving: {requestUrl}");
                             await SendAudioAsync(guild, requestUrl);
@@ -124,7 +93,7 @@ namespace MusicBot
                         //auto playlist has music and user requests are empty
                         while (IsPlaying && autoPlaylistHasSongs && !requestsPlaylistHasSongs)
                         {
-                            await CheckVideoTitleAsync(autoplayUrl);
+                            CurrentlyPlaying = await _ytHandler.GetVideoTitle(autoplayUrl);
                             await discordClient.SetGameAsync(CurrentlyPlaying);
                             Console.WriteLine($"[ {DateTime.Now,0:t} ] Retrieving {CurrentlyPlaying}");
                             Console.WriteLine($"[ {DateTime.Now,0:t} ] Number of songs left in auto playlist: {_autoPlaylist.Count}");
@@ -134,10 +103,10 @@ namespace MusicBot
                             requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
                         }
                     }
-                    else if (!autoPlaylistHasSongs)
+                    else if (ValidPlaylistId && !autoPlaylistHasSongs)
                     {
                         Console.WriteLine($"[ {DateTime.Now,0:t} ] Retrieving auto playlist from Youtube.");
-                        await CreateAutoPlaylistAsync();
+                        _autoPlaylist = await _ytHandler.CreateAutoPlaylistAsync(playlistId, _autoPlaylist);
                         Console.WriteLine($"[ {DateTime.Now,0:t} ] Playlist retrieval complete. Number of songs in list: {_autoPlaylist.Count}");
                         autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
                     }
@@ -207,33 +176,6 @@ namespace MusicBot
             }
         }
 
-        private async Task CheckVideoTitleAsync(string url)
-        {
-            if (await VideoExistsAsync(url))
-            {
-                var info = await _ytClient.Videos.GetAsync(url);
-                CurrentlyPlaying = info.Title;
-            }
-            else
-                CurrentlyPlaying = null;
-        }
-
-        private async Task<bool> VideoExistsAsync(string url)
-        {
-            try
-            {
-                var info = await _ytClient.Videos.GetAsync(url);
-                if (info != null)
-                    return true;
-                return false;
-            }
-            catch (Exception e)
-            {
-                Console.WriteLine($"[ {DateTime.Now,0:t} ] Exception while checking if video exists: {e}");
-                return false;
-            }
-        }
-
         private async Task SendAudioAsync(IGuild guild, string url)
         {
             IAudioClient client;
@@ -262,18 +204,14 @@ namespace MusicBot
 
         private Process CreateStream(string url)
         {
-            Process currentSong = new Process();
-            currentSong.StartInfo = new ProcessStartInfo
+            return Process.Start(new ProcessStartInfo
             {
                 FileName = "cmd.exe",
                 Arguments = $"/C youtube-dl.exe -o - {url} | ffmpeg -i pipe:0 -ac 2 -f s16le -ar 48000 pipe:1",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 CreateNoWindow = true
-            };
-
-            currentSong.Start();
-            return currentSong;
+            });
         }
     }
 }

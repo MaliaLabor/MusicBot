@@ -19,6 +19,9 @@ namespace MusicBot
         private AudioOutStream _audioStream;
         private IYoutubeHandler _ytHandler;
 
+        private bool _autoPlaylistHasSongs = false;
+        private bool _requestsPlaylistHasSongs = false;
+
         public bool IsPlaying { get; set; }
         public string CurrentlyPlaying { get; set; }
         public bool ValidPlaylistId { get; set; }
@@ -60,55 +63,58 @@ namespace MusicBot
                     _audioStream = null;
                 }
                 _audioStream = client.CreatePCMStream(AudioApplication.Mixed); // default bitrate is 96 * 1024 if not specified
-                bool autoPlaylistHasSongs = true;
-                bool requestsPlaylistHasSongs = true;
-                string autoplayUrl;
-                string requestUrl;
-                // check if auto playlist has songs in it, if not create playlist from config
-                _autoPlaylist = await _ytHandler.CreateAutoPlaylistAsync(playlistId, _autoPlaylist);
-                autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
-                if (!autoPlaylistHasSongs)
+                
+                string autoplayUrl = "";
+                string requestUrl = "";
+                // if auto playlist is empty or new playlist id is given
+                if (!_autoPlaylistHasSongs || !String.IsNullOrEmpty(playlistId))
                 {
-                    ValidPlaylistId = false;
-                    Console.WriteLine($"[ {DateTime.Now,0:t} ] No valid playlist id found. Disabling autoplaylist.");
-                }
-                else
-                    ValidPlaylistId = true;
-                requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
-                while (IsPlaying && (requestsPlaylistHasSongs || autoPlaylistHasSongs))
-                {
-                    if (requestsPlaylistHasSongs)
+                    _autoPlaylist = new ConcurrentQueue<string>();
+                    _autoPlaylist = await _ytHandler.CreateAutoPlaylistAsync(playlistId, _autoPlaylist);
+                    _autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
+                    if (!_autoPlaylistHasSongs)
                     {
-                        while (IsPlaying && requestsPlaylistHasSongs)
+                        ValidPlaylistId = false;
+                        Console.WriteLine($"[ {DateTime.Now,0:t} ] No valid playlist id found. Disabling autoplaylist.");
+                    }
+                    else
+                        ValidPlaylistId = true;
+                }
+                _requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
+                while (IsPlaying && (_requestsPlaylistHasSongs || _autoPlaylistHasSongs))
+                {
+                    if (_requestsPlaylistHasSongs)
+                    {
+                        while (IsPlaying && _requestsPlaylistHasSongs)
                         {
                             CurrentlyPlaying = await _ytHandler.GetVideoTitle(requestUrl);
                             await discordClient.SetGameAsync(CurrentlyPlaying);
                             Console.WriteLine($"[ {DateTime.Now,0:t} ] Retrieving: {requestUrl}");
                             await SendAudioAsync(guild, requestUrl);
-                            requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
+                            _requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
                         }
                     }
-                    else if (autoPlaylistHasSongs)
+                    else if (_autoPlaylistHasSongs)
                     {
                         //auto playlist has music and user requests are empty
-                        while (IsPlaying && autoPlaylistHasSongs && !requestsPlaylistHasSongs)
+                        while (IsPlaying && _autoPlaylistHasSongs && !_requestsPlaylistHasSongs)
                         {
                             CurrentlyPlaying = await _ytHandler.GetVideoTitle(autoplayUrl);
                             await discordClient.SetGameAsync(CurrentlyPlaying);
                             Console.WriteLine($"[ {DateTime.Now,0:t} ] Retrieving {CurrentlyPlaying}");
                             Console.WriteLine($"[ {DateTime.Now,0:t} ] Number of songs left in auto playlist: {_autoPlaylist.Count}");
                             await SendAudioAsync(guild, autoplayUrl);
-                            autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
+                            _autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
                             //check user requests playlist for new requests
-                            requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
+                            _requestsPlaylistHasSongs = _userRequests.TryDequeue(out requestUrl);
                         }
                     }
-                    else if (ValidPlaylistId && !autoPlaylistHasSongs)
+                    else if (ValidPlaylistId && !_autoPlaylistHasSongs)
                     {
                         Console.WriteLine($"[ {DateTime.Now,0:t} ] Retrieving auto playlist from Youtube.");
                         _autoPlaylist = await _ytHandler.CreateAutoPlaylistAsync(playlistId, _autoPlaylist);
                         Console.WriteLine($"[ {DateTime.Now,0:t} ] Playlist retrieval complete. Number of songs in list: {_autoPlaylist.Count}");
-                        autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
+                        _autoPlaylistHasSongs = _autoPlaylist.TryDequeue(out autoplayUrl);
                     }
                 }
                 // clear out stream if loop has stopped

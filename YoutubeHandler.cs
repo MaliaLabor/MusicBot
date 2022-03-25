@@ -43,14 +43,15 @@ namespace MusicBot
                     id = _playlistId;
                 if (!String.IsNullOrEmpty(id))
                 {
+                    var newPlaylist = new ConcurrentQueue<string>();
                     // get list of videos in playlist and shuffle them
                     var videos = await _ytClient.Playlists.GetVideosAsync(id);
                     var rng = new Random();
                     foreach (var video in videos.OrderBy(x => rng.Next()))
                     {
-                        autoPlaylist.Enqueue($"https://youtu.be/{video.Id}");
+                        newPlaylist.Enqueue($"https://youtu.be/{video.Id}");
                     }
-                    return autoPlaylist;
+                    return newPlaylist;
                 }
                 Console.WriteLine($"[ {DateTime.Now,0:t} ] Error creating auto playlist. No valid playlist IDs found.");
                 return null;
@@ -92,9 +93,12 @@ namespace MusicBot
         {
             try
             {
-                var info = await _ytClient.Playlists.GetAsync(playlistId);
-                if (info != null)
-                    return true;
+                if (!String.IsNullOrEmpty(playlistId))
+                {
+                    var info = await _ytClient.Playlists.GetAsync(playlistId);
+                    if (info != null)
+                        return true;
+                }
                 return false;
             }
             catch (Exception e)

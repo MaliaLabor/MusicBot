@@ -41,8 +41,11 @@ namespace MusicBot.Modules
         [Summary("Start the music autoplay system.")]
         public async Task AutoPlay([Summary("Can be left empty and bot will pull from config file. Part of Playlist URL after `https://www.youtube.com/playlist?list=`"), Remainder] string playlistID = null)
         {
-            Console.WriteLine($"[ {DateTime.Now,0:t} ] Autoplay started");
-            await _service.StartAutoplayAsync(Context.Guild as SocketGuild, Context.Client, (Context.User as IVoiceState).VoiceChannel, playlistID);
+            if (!_service.IsPlaying)
+            {
+                Console.WriteLine($"[ {DateTime.Now,0:t} ] Autoplay started");
+                await _service.StartAutoplayAsync(Context.Guild as SocketGuild, Context.Client, (Context.User as IVoiceState).VoiceChannel, playlistID);
+            }
         }
 
         [Command("play", RunMode = RunMode.Async)]
